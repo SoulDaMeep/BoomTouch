@@ -1,165 +1,145 @@
 #include "pch.h"
-
 #include "BoomTouch.h"
-
 #include <vector>
-
-/*
-    General formatting suggestions:
-        - Put empty lines between your functions and some of your lines of code to break them up visually for better readability
-        - I generally put curly braces on new lines. Makes it much easier to see where a block of code begins and ends
-*/
 
 BAKKESMOD_PLUGIN(BoomTouch, "Explodes the player when they touch the ball in a set amount of time", plugin_version, PLUGINTYPE_FREEPLAY)
 
 std::shared_ptr < CVarManagerWrapper > _globalCvarManager;
 
-struct playerExplode {
-    float time;
-    std::string id;
+struct ExplodingPlayer {
+    float timeRemaining;
+    std::string playerId;
 };
 
-std::vector < playerExplode > explodeyArr;
+std::vector<ExplodingPlayer> explodingPlayers;
 
-// determine wether the player id is a bot or an actual player
-std::string GetUniqueId(PriWrapper& pri) {
+std::string GetPlayerUniqueId(PriWrapper& pri) {
     if (pri.GetbBot()) {
         return "Bot|" + pri.GetPlayerName().ToString();
     }
     return pri.GetUniqueIdWrapper().GetIdString();
 }
 
-// get the delta time between the previous frame and the current frame
-float GetDelta() {
+float GetDeltaTime() {
     using namespace std::chrono;
 
-    static steady_clock::time_point PreviousTime = steady_clock::now();
+    static steady_clock::time_point previousTime = steady_clock::now();
 
-    //Store the current time and calculate the delta from that
-    steady_clock::time_point CurrentTime = steady_clock::now();
-    float InputDelta = duration_cast <duration < float >> (CurrentTime - PreviousTime).count();
+    steady_clock::time_point currentTime = steady_clock::now();
+    float deltaTime = duration_cast<duration<float>>(currentTime - previousTime).count();
 
-    //Set PreviousTime for the next delta call
-    PreviousTime = CurrentTime;
-    return InputDelta;
+    previousTime = currentTime;
+    return deltaTime;
 }
 
-// search for players in the main array(std::vector)
-int findPlayer(std::vector < playerExplode > arr, playerExplode ele) {
+int FindPlayerIndex(std::vector<ExplodingPlayer>& arr, const std::string& playerId) {
     for (int i = 0; i < arr.size(); i++) {
-        if (arr[i].id == ele.id) {
+        if (arr[i].playerId == playerId) {
             return i;
         }
     }
-    // default return value
     return -1;
 }
 
-float delta;
-bool on = false;
-bool inReplay = false;
+float deltaTime;
+bool isPluginEnabled = false;
+bool isReplayActive = false;
+
 void BoomTouch::onLoad() {
     _globalCvarManager = cvarManager;
-    cvarManager->registerCvar("BoomTouch_On", "0", "Turn off and on"); // Give elaborate names -> BoomTouch, another plugin could use the same cvar
-    cvarManager->registerCvar("BoomTouch_TimeBeforeExplosion", "2", "boom");
-    gameWrapper->HookEventWithCaller < CarWrapper >("Function TAGame.Car_TA.OnHitBall", [this](CarWrapper car, void* params, std::string eventName) {
-        CVarWrapper onOff = cvarManager->getCvar("BoomTouch_On");
-    //null check cvar -> BM no longer has the cvar, in case i change the name of the cvar
-    if (onOff.IsNull()) {
-        return;
-    }
-    bool on = onOff.getBoolValue();
-    if (on && !inReplay) {
-        // if there is no car, do nothing
-        if (car.IsNull()) {
-            return;
-        }
 
-        // if there is no pri, do nothing
-        PriWrapper pri = car.GetPRI();
-        if (pri.IsNull()) {
-            return;
-        }
-
-        // get the id, if its a bot return it as a bot id
-        std::string id = GetUniqueId(pri);
-
-        //does the id already exist in the array?
-        for (playerExplode player : explodeyArr) {
-            if (player.id == id) {
-                return;
-            }
-        }
-
-        // get the amount of time before explosion variable
-        CVarWrapper timeBeforeExplosion = cvarManager->getCvar("BoomTouch_TimeBeforeExplosion");
-        if (timeBeforeExplosion.IsNull()) {
-            return;
-        }
-
-        // get the int value
-        int tbe = timeBeforeExplosion.getIntValue();
-
-        // create a new player with the time variable
-        playerExplode player;
-        player.id = id;
-        player.time = tbe; // change this number for faster or slower resawn time
-        explodeyArr.push_back(player);
-    }
-        });
+    cvarManager->registerCvar("BoomTouch_Enabled", "0", "Turn off and on");
+    cvarManager->registerCvar("BoomTouch_ExplosionTime", "2", "Time before explosion");
 
     gameWrapper->HookEvent("Function TAGame.Ball_TA.OnHitGoal", [this](std::string eventName) {
-        explodeyArr = {};
-        });
+        explodingPlayers.clear();
+    });
+
     gameWrapper->HookEvent("Function GameEvent_Soccar_TA.ReplayPlayback.BeginState", [this](std::string eventName) {
-        inReplay = true;
-        });
+        isReplayActive = true;
+    });
+
     gameWrapper->HookEvent("Function GameEvent_Soccar_TA.ReplayPlayback.EndState", [this](std::string eventName) {
-        inReplay = false;
+        isReplayActive = false;
+    });
+
+    gameWrapper->HookEventWithCaller<CarWrapper>("Function TAGame.Car_TA.OnHitBall", [this](CarWrapper car, void* params, std::string eventName) {
+        CVarWrapper enabledCvar = cvarManager->getCvar("BoomTouch_Enabled");
+        if (enabledCvar.IsNull()) {
+            return;
+        }
+
+        isPluginEnabled = enabledCvar.getBoolValue();
+        if (isPluginEnabled && !isReplayActive) {
+            if (car.IsNull()) {
+                return;
+            }
+
+            PriWrapper pri = car.GetPRI();
+            if (pri.IsNull()) {
+                return;
+            }
+
+            std::string playerId = GetPlayerUniqueId(pri);
+
+            for (const ExplodingPlayer& player : explodingPlayers) {
+                if (player.playerId == playerId) {
+                    return;
+                }
+            }
+
+            CVarWrapper explosionTimeCvar = cvarManager->getCvar("BoomTouch_ExplosionTime");
+            if (explosionTimeCvar.IsNull()) {
+                return;
+            }
+
+            int explosionTime = explosionTimeCvar.getIntValue();
+
+            ExplodingPlayer newPlayer;
+            newPlayer.playerId = playerId;
+            newPlayer.timeRemaining = static_cast<float>(explosionTime);
+            explodingPlayers.push_back(newPlayer);
+        }
         });
+
+
     gameWrapper->HookEvent("Function Engine.GameViewportClient.Tick", [this](std::string eventName) {
-        delta = GetDelta();
+        deltaTime = GetDeltaTime();
 
-    //get the server
-    ServerWrapper server = gameWrapper->GetCurrentGameState();
-    if (server.IsNull()) {
-        return;
-    }
+        ServerWrapper server = gameWrapper->GetCurrentGameState();
+        if (server.IsNull()) {
+            return;
+        }
 
-    //get all the cars
-    ArrayWrapper < CarWrapper > cars = server.GetCars();
+        ArrayWrapper<CarWrapper> cars = server.GetCars();
 
-    for (playerExplode& player : explodeyArr) {
-        player.time -= delta;
+        for (ExplodingPlayer& player : explodingPlayers) {
+            player.timeRemaining -= deltaTime;
 
-        if (player.time <= 0.0f) { // I would suggest <= 0 instead of just < 0
+            if (player.timeRemaining <= 0.0f) {
+                std::string currentPlayerId = player.playerId;
 
-            //looking for this id
-            std::string currentId = player.id;
+                for (CarWrapper car : cars) {
+                    if (car.IsNull()) {
+                        return;
+                    }
 
-            for (CarWrapper car : cars) {
-                //does the car exist still?
-                if (car.IsNull()) {
-                    return;
-                }
+                    PriWrapper pri = car.GetPRI();
 
-                PriWrapper pri = car.GetPRI();
+                    if (pri.IsNull()) {
+                        return;
+                    }
+                    std::string carPlayerId = GetPlayerUniqueId(pri);
 
-                if (pri.IsNull()) {
-                    return;
-                }
-                std::string carId = GetUniqueId(pri);
-
-                if (currentId == carId) {
-                    int playerIndex = findPlayer(explodeyArr, player);
-                    explodeyArr.erase(explodeyArr.begin() + playerIndex);
-                    car.Demolish2(car);
+                    if (currentPlayerId == carPlayerId) {
+                        int playerIndex = FindPlayerIndex(explodingPlayers, currentPlayerId);
+                        explodingPlayers.erase(explodingPlayers.begin() + playerIndex);
+                        car.Demolish2(car);
+                    }
                 }
             }
         }
-    }
-    // End of indented block
-        });
+     });
 }
 
 void BoomTouch::onUnload() {}

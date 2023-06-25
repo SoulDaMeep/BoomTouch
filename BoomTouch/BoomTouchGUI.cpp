@@ -11,17 +11,21 @@ std::string BoomTouch::GetPluginName() {
 //  f2 -> plugins -> BoomTouch
 void BoomTouch::RenderSettings() {
 	ImGui::TextUnformatted("BoomTouch plugin settings");
-	CVarWrapper onOff = cvarManager->getCvar("BoomTouch_On");
-	CVarWrapper timeBeforeExplosion = cvarManager->getCvar("BoomTouch_TimeBeforeExplosion");
-	if (onOff.IsNull()) { return; }
-	if (timeBeforeExplosion.IsNull()) { return; }
-	int tbe = timeBeforeExplosion.getIntValue();
-	bool onoff = onOff.getBoolValue();
+
+	CVarWrapper onOffCvar = cvarManager->getCvar("BoomTouch_Enabled");
+	CVarWrapper timeBeforeExplosionCvar = cvarManager->getCvar("BoomTouch_ExplosionTime");
+
+	if (onOffCvar.IsNull())               return;
+	if (timeBeforeExplosionCvar.IsNull()) return;
+
+	int tbe    = timeBeforeExplosionCvar.getIntValue();
+	bool onoff = onOffCvar.getBoolValue();
+
 	if (ImGui::Checkbox("On/Off", &onoff)) {
-		onOff.setValue(onoff);
+		onOffCvar.setValue(onoff);
 	}
 	if (ImGui::SliderInt("Time Before Explosion", &tbe, 0, 10)) {
-		timeBeforeExplosion.setValue(tbe);
+		timeBeforeExplosionCvar.setValue(tbe);
 	}
 }
 
